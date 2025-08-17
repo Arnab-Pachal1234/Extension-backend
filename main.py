@@ -3,6 +3,9 @@ import yt_dlp
 import os
 import pickle
 import time
+import json
+import io
+from dotenv import load_dotenv
 
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -11,13 +14,15 @@ from google.auth.transport.requests import Request
 
 app = Flask(__name__)
 
+# Load environment variables
+load_dotenv()
+
 # Folder for downloaded videos
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 # Google Drive API scope
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
-
 
 def get_gdrive_service():
     """Authenticate and return Google Drive service instance"""
@@ -30,14 +35,22 @@ def get_gdrive_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
+            # Load credentials.json content from environment
+            creds_json = os.getenv("GOOGLE_CREDENTIALS")
+            if not creds_json:
+                raise Exception("❌ GOOGLE_CREDENTIALS not found in environment variables")
+
+            creds_dict = json.loads(creds_json)
+
+            # Save creds_dict temporarily in memory
+            flow = InstalledAppFlow.from_client_config(creds_dict, SCOPES)
             creds = flow.run_local_server(port=0)
 
+        # Save token for reuse
         with open("token.pickle", "wb") as token:
             pickle.dump(creds, token)
 
     return build("drive", "v3", credentials=creds)
-
 
 def get_or_create_folder(service, folder_name):
     """Get or create a Google Drive folder by name"""
@@ -52,7 +65,6 @@ def get_or_create_folder(service, folder_name):
     folder = service.files().create(body=file_metadata, fields="id").execute()
     return folder.get("id")
 
-
 @app.route("/download", methods=["POST"])
 def video_to_drive():
     """Download YouTube video and upload to Google Drive"""
@@ -65,7 +77,6 @@ def video_to_drive():
 
     outtmpl = os.path.join(DOWNLOAD_DIR, "%(title)s.%(ext)s")
 
-    # Pick best single MP4 stream
     ydl_opts = {
         "format": "best[ext=mp4]/best",
         "outtmpl": outtmpl,
@@ -93,7 +104,6 @@ def video_to_drive():
 
         media = MediaFileUpload(filename, mimetype="video/mp4", resumable=True)
 
-        # ✅ Use resumable upload loop
         request_upload = service.files().create(
             body=file_metadata,
             media_body=media,
@@ -108,7 +118,7 @@ def video_to_drive():
 
         print("✅ Upload complete")
 
-        # ✅ Now close file handles
+        # Close file handles
         try:
             if hasattr(media, "fd") and media.fd:
                 media.fd.close()
@@ -143,11 +153,9 @@ def video_to_drive():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
 @app.route("/")
 def home():
     return jsonify({"message": "🎬 YouTube → Google Drive API running"})
-
 
 if __name__ == "__main__":
     app.run(port=5000, debug=True)

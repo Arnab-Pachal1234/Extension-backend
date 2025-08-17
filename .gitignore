@@ -1,4 +1,4 @@
-credentials.json
+.env
 token.pickle
 myvenv
 downloads
